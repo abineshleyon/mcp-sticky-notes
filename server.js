@@ -170,7 +170,7 @@ async function handleToolCall(name, args) {
 // 3. Other Endpoints
 // ---------------------------------------------------------
 app.get('/', (req, res) => {
-  res.send('Sticky Notes MCP Server is running. Use /sse to connect.');
+  res.send('Sticky Notes MCP Server is running. Use /sse to connect. this is the testing for render taking new changes or not');
 });
 
 app.post('/sync', (req, res) => {
