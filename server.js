@@ -3,7 +3,7 @@ const cors = require('cors');
 const bodyParser = require('body-parser');
 
 const app = express();
-const PORT = 3500;
+const PORT = process.env.PORT || 3500;
 
 // Store notes in memory (resets on restart)
 let notesStore = [];
@@ -245,7 +245,7 @@ app.get('/notes', (req, res) => {
   res.json({ notes: notesStore });
 });
 
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 MCP Server running on port ${PORT}`);
 });
 
