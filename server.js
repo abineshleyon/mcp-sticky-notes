@@ -225,6 +225,14 @@ app.post('/mcp/tools/call', async (req, res) => {
 
 // Chrome Extension Endpoints
 
+app.get('/', (req, res) => {
+  res.json({
+    status: 'online',
+    message: 'Sticky Notes MCP Server is running',
+    version: '1.0.0'
+  });
+});
+
 // Sync notes from Chrome extension
 app.post('/sync', (req, res) => {
   const { notes } = req.body;
