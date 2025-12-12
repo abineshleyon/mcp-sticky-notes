@@ -5,265 +5,248 @@ const bodyParser = require('body-parser');
 const app = express();
 const PORT = 3500;
 
-// Store notes in memory (you can add database later)
+// Store notes in memory (resets on restart)
 let notesStore = [];
 
 // Middleware
 app.use(cors());
 app.use(bodyParser.json());
 
-// MCP Tools/Resources for ChatGPT
-const mcpTools = {
-  tools: [
-    {
-      name: "list_notes",
-      description: "Get all sticky notes from the Chrome extension",
-      inputSchema: {
-        type: "object",
-        properties: {},
-        required: []
-      }
-    },
-    {
-      name: "create_note",
-      description: "Create a new sticky note",
-      inputSchema: {
-        type: "object",
-        properties: {
-          title: {
-            type: "string",
-            description: "The title of the note"
-          },
-          text: {
-            type: "string",
-            description: "The content of the note"
-          }
-        },
-        required: ["title", "text"]
-      }
-    },
-    {
-      name: "update_note",
-      description: "Update an existing sticky note",
-      inputSchema: {
-        type: "object",
-        properties: {
-          id: {
-            type: "string",
-            description: "The ID of the note to update"
-          },
-          title: {
-            type: "string",
-            description: "The new title of the note"
-          },
-          text: {
-            type: "string",
-            description: "The new content of the note"
-          }
-        },
-        required: ["id"]
-      }
-    },
-    {
-      name: "delete_note",
-      description: "Delete a sticky note",
-      inputSchema: {
-        type: "object",
-        properties: {
-          id: {
-            type: "string",
-            description: "The ID of the note to delete"
-          }
-        },
-        required: ["id"]
-      }
-    },
-    {
-      name: "search_notes",
-      description: "Search notes by keyword in title or content",
-      inputSchema: {
-        type: "object",
-        properties: {
-          query: {
-            type: "string",
-            description: "The search query"
-          }
-        },
-        required: ["query"]
-      }
-    }
-  ]
-};
+// ---------------------------------------------------------
+// MCP Constants & Tools Definition
+// ---------------------------------------------------------
+const SERVER_NAME = "sticky-notes-mcp";
+const SERVER_VERSION = "1.0.0";
 
-// MCP Protocol Endpoints
-
-// Initialize - Called when ChatGPT connects
-app.post('/mcp/initialize', (req, res) => {
-  res.json({
-    protocolVersion: "2024-11-05",
-    capabilities: {
-      tools: {},
-      resources: {}
-    },
-    serverInfo: {
-      name: "sticky-notes-mcp",
-      version: "1.0.0"
+const mcpTools = [
+  {
+    name: "list_notes",
+    description: "Get all sticky notes from the Chrome extension",
+    inputSchema: {
+      type: "object",
+      properties: {},
+      required: []
     }
+  },
+  {
+    name: "create_note",
+    description: "Create a new sticky note",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "The title of the note" },
+        text: { type: "string", description: "The content of the note" }
+      },
+      required: ["title", "text"]
+    }
+  },
+  {
+    name: "update_note",
+    description: "Update an existing sticky note",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "The ID of the note to update" },
+        title: { type: "string", description: "The new title of the note" },
+        text: { type: "string", description: "The new content of the note" }
+      },
+      required: ["id"]
+    }
+  },
+  {
+    name: "delete_note",
+    description: "Delete a sticky note",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "The ID of the note to delete" }
+      },
+      required: ["id"]
+    }
+  }
+];
+
+// ---------------------------------------------------------
+// 1. SSE Endpoint (The Connection)
+// ChatGPT connects here to start the session.
+// ---------------------------------------------------------
+app.get('/sse', (req, res) => {
+  // Set headers for Server-Sent Events
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+  });
+
+  // Send the "endpoint" event.
+  // This tells ChatGPT where to send the actual commands (POST requests).
+  // We use a relative path "/messages".
+  res.write(`event: endpoint\ndata: /messages\n\n`);
+
+  console.log("✅ New SSE connection established");
+
+  // Keep the connection alive
+  const keepAlive = setInterval(() => {
+    res.write(': keep-alive\n\n');
+  }, 15000);
+
+  req.on('close', () => {
+    console.log("❌ SSE connection closed");
+    clearInterval(keepAlive);
   });
 });
 
-// List available tools
-app.post('/mcp/tools/list', (req, res) => {
-  res.json(mcpTools);
-});
+// ---------------------------------------------------------
+// 2. Messages Endpoint (The Logic)
+// ChatGPT sends commands (JSON-RPC) here.
+// ---------------------------------------------------------
+app.post('/messages', async (req, res) => {
+  const message = req.body;
+  
+  // Basic JSON-RPC validation
+  if (!message.method) {
+    return res.status(400).json({ error: "Invalid JSON-RPC message" });
+  }
 
-// Execute tool calls from ChatGPT
-app.post('/mcp/tools/call', async (req, res) => {
-  const { name, arguments: args } = req.body;
+  console.log(`📩 Received method: ${message.method}`);
 
   try {
-    let result;
+    let result = null;
 
-    switch (name) {
-      case 'list_notes':
+    switch (message.method) {
+      // --- Initialization ---
+      case 'initialize':
         result = {
-          content: [
-            {
-              type: "text",
-              text: JSON.stringify(notesStore, null, 2)
-            }
-          ]
+          protocolVersion: "2024-11-05",
+          capabilities: {
+            tools: {} // We support tools
+          },
+          serverInfo: {
+            name: SERVER_NAME,
+            version: SERVER_VERSION
+          }
         };
         break;
 
-      case 'create_note':
-        const newNote = {
-          id: Date.now().toString(36) + Math.random().toString(36).substr(2),
-          title: args.title,
-          text: args.text,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        };
-        notesStore.unshift(newNote);
+      case 'notifications/initialized':
+        // Just an acknowledgement, no response data needed
+        break;
+
+      // --- Tool Listing ---
+      case 'tools/list':
         result = {
-          content: [
-            {
-              type: "text",
-              text: `Note created successfully: ${JSON.stringify(newNote, null, 2)}`
-            }
-          ]
+          tools: mcpTools
         };
         break;
 
-      case 'update_note':
-        const noteIndex = notesStore.findIndex(n => n.id === args.id);
-        if (noteIndex === -1) {
-          throw new Error('Note not found');
-        }
-        notesStore[noteIndex] = {
-          ...notesStore[noteIndex],
-          ...(args.title && { title: args.title }),
-          ...(args.text && { text: args.text }),
-          updatedAt: new Date().toISOString()
-        };
-        result = {
-          content: [
-            {
-              type: "text",
-              text: `Note updated successfully: ${JSON.stringify(notesStore[noteIndex], null, 2)}`
-            }
-          ]
-        };
-        break;
-
-      case 'delete_note':
-        const initialLength = notesStore.length;
-        notesStore = notesStore.filter(n => n.id !== args.id);
-        if (notesStore.length === initialLength) {
-          throw new Error('Note not found');
-        }
-        result = {
-          content: [
-            {
-              type: "text",
-              text: `Note deleted successfully`
-            }
-          ]
-        };
-        break;
-
-      case 'search_notes':
-        const query = args.query.toLowerCase();
-        const matches = notesStore.filter(n => 
-          n.title.toLowerCase().includes(query) || 
-          n.text.toLowerCase().includes(query)
-        );
-        result = {
-          content: [
-            {
-              type: "text",
-              text: `Found ${matches.length} notes:\n${JSON.stringify(matches, null, 2)}`
-            }
-          ]
-        };
+      // --- Tool Execution ---
+      case 'tools/call':
+        result = await handleToolCall(message.params.name, message.params.arguments);
         break;
 
       default:
-        throw new Error(`Unknown tool: ${name}`);
+        // Ignore unknown methods or pings
+        break;
     }
 
-    res.json(result);
+    // Send valid JSON-RPC response
+    if (message.id !== undefined) {
+      res.json({
+        jsonrpc: "2.0",
+        id: message.id,
+        result: result
+      });
+    } else {
+      // Notifications (no ID) don't get a response
+      res.status(200).end();
+    }
+
   } catch (error) {
-    res.status(400).json({
-      error: {
-        code: "TOOL_EXECUTION_ERROR",
-        message: error.message
-      }
-    });
+    console.error("Error processing message:", error);
+    if (message.id !== undefined) {
+      res.json({
+        jsonrpc: "2.0",
+        id: message.id,
+        error: {
+          code: -32603,
+          message: error.message
+        }
+      });
+    } else {
+      res.status(500).end();
+    }
   }
 });
 
-// Chrome Extension Endpoints
+// Helper function to handle tool logic
+async function handleToolCall(name, args) {
+  switch (name) {
+    case 'list_notes':
+      return {
+        content: [{ type: "text", text: JSON.stringify(notesStore, null, 2) }]
+      };
 
+    case 'create_note':
+      const newNote = {
+        id: Date.now().toString(36),
+        title: args.title,
+        text: args.text,
+        timestamp: new Date().toISOString()
+      };
+      notesStore.unshift(newNote);
+      return {
+        content: [{ type: "text", text: `Note created: ${newNote.title} (ID: ${newNote.id})` }]
+      };
+
+    case 'update_note':
+      const index = notesStore.findIndex(n => n.id === args.id);
+      if (index === -1) throw new Error("Note not found");
+      
+      notesStore[index] = { ...notesStore[index], ...args };
+      return {
+        content: [{ type: "text", text: `Note updated: ${notesStore[index].title}` }]
+      };
+
+    case 'delete_note':
+      const initialLength = notesStore.length;
+      notesStore = notesStore.filter(n => n.id !== args.id);
+      if (notesStore.length === initialLength) throw new Error("Note not found");
+      return {
+        content: [{ type: "text", text: "Note deleted successfully" }]
+      };
+
+    default:
+      throw new Error(`Unknown tool: ${name}`);
+  }
+}
+
+// ---------------------------------------------------------
+// 3. Other Endpoints (Root & Chrome Extension)
+// ---------------------------------------------------------
+
+// Root endpoint - Health check
 app.get('/', (req, res) => {
-  res.json({
-    status: 'online',
-    message: 'Sticky Notes MCP Server is running',
-    version: '1.0.0'
-  });
+  res.send('Sticky Notes MCP Server is running. Use /sse to connect.');
 });
 
-// Sync notes from Chrome extension
+// Chrome Extension: Sync
 app.post('/sync', (req, res) => {
   const { notes } = req.body;
-  notesStore = notes || [];
-  res.json({ 
-    success: true, 
-    message: 'Notes synced successfully',
-    count: notesStore.length 
-  });
+  if (Array.isArray(notes)) {
+    notesStore = notes;
+    res.json({ success: true, count: notesStore.length });
+  } else {
+    res.status(400).json({ error: "Invalid notes data" });
+  }
 });
 
-// Get all notes (for Chrome extension)
+// Chrome Extension: Get
 app.get('/notes', (req, res) => {
   res.json({ notes: notesStore });
 });
 
-// Health check
-app.get('/health', (req, res) => {
-  res.json({ 
-    status: 'healthy',
-    notesCount: notesStore.length,
-    timestamp: new Date().toISOString()
-  });
+app.listen(PORT, () => {
+  console.log(`🚀 MCP Server running on port ${PORT}`);
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 MCP Server running on http://localhost:${PORT}`);
-  console.log(`📝 Notes count: ${notesStore.length}`);
-  console.log(`\n💡 To connect to ChatGPT:`);
-  console.log(`   1. Go to ChatGPT Developer Mode settings`);
-  console.log(`   2. Add custom MCP server`);
-  console.log(`   3. Use URL: http://localhost:${PORT}`);
-  console.log(`   4. Authentication: None`);
-});
+module.exports = app;
